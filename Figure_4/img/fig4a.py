@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 path = str(pathlib.Path(__file__).parent.resolve())
-df = pd.read_excel(path + '/fig4a.xlsx')
+df = pd.read_excel(path + '/data/fig4a.xlsx')
 # df = df[df['density']<10]
 g = sns.regplot(data=df,x="count", y="length",scatter=True, color = '#2D708EFF')
 plt.ylim(0,50)
