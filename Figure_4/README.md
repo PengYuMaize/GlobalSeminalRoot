@@ -18,4 +18,5 @@ Run partial Hydraulic Viper (no soil)
 
 <img src="./img/suf.png" alt="Seminal counts vs. SUF" width="500"/>
 
+<img src="./img/fig4a.png" alt="Primary root length vs. seminals and Lateral root density" width="500"/>
 
