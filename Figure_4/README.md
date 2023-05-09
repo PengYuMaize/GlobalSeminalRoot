@@ -12,7 +12,7 @@ Run partial Hydraulic Viper (no soil)
 
 - **data** : output data from Hydraulic Viper
 - **www** : input data
-- **img** : figure
+- **img** : figure and plot script 
 
 ## results
 
