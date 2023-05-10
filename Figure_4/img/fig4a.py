@@ -8,7 +8,7 @@ import scipy.stats
 
 
 path = str(pathlib.Path(__file__).parent.resolve())
-df = pd.read_excel(path + '/fig4a.xlsx')
+df = pd.read_excel(path + '/data/fig4a.xlsx')
 
 x = scipy.stats.pearsonr(df['length'], df['count'])
 y = scipy.stats.pearsonr(df['density'], df['count'])
