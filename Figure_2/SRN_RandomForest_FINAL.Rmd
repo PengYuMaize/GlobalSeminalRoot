@@ -1,0 +1,179 @@
+---
+title: "Seminal_Prediction"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+### Using environmental gradients and random forest modeling to predict seminal root number (SRN)
+#### Chloee McLaughlin
+##### Updated 5/10/22
+
+```{r, Libraries, include=FALSE}
+library(ggplot2)                    
+library(dplyr)
+library(maps)
+library(rworldmap)
+library(randomForest)
+library(Boruta)
+library(rnaturalearth)
+library(iml)
+```
+
+```{r, CIM and SRN data load, include=FALSE}
+##Has env and soil data for all CIMMYT accessions (Mexican FOAM genotypes available), will use this for trait predictions with trained model
+foam <- read.csv("./data/FOAM_EnvVars_SRN.csv")
+
+sem <- read.csv("./data/PengData_EnvVars_CleanedImputed_SRN.csv")
+
+##Create a new absolute latitude column for biologically relevant environmental variable 
+sem$abs_Latitude <- abs(sem$Latitude)
+foam$abs_Latitude <- abs(foam$Latitude)
+
+##Create a palette 
+myPalette <- colorRampPalette(c("#f9f3c2","#660000")) 
+sc <- scale_colour_gradientn(colours = myPalette(100)) #can add limits here for consistency between plots with- limits=c(0, 9))
+```
+
+```{r, include=FALSE}
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+SRN_map <- ggplot(data = world) +
+   ggtitle("Observed SRN") +
+ theme(plot.title = element_text(size=12)) +
+  geom_sf() +
+  coord_sf(xlim = c(-120, -80), ylim = c(0,35), expand = TRUE) +
+  geom_point(aes(x=Longitude, y=Latitude, color=SRN_avg), data=sem, size = 1, alpha=.7) +
+  sc
+
+foam_map <- ggplot(data = world) +
+ ggtitle("CIMMyT Accessions") +
+ theme(plot.title = element_text(size=12)) +
+  geom_sf() +
+  coord_sf(xlim = c(-120, -80), ylim = c(0,35), expand = TRUE) +
+  geom_point(aes(x=Longitude, y=Latitude), data=foam, size = 1, alpha=.9) 
+```
+Distribution of phenotpyed accessions and accessions for predicitons 
+```{r, echo=FALSE,fig.show="hold", out.width="50%"}
+SRN_map
+foam_map
+```
+Using the Boruta method to identify environmental descriptors that describe variation in SRN. 
+```{r, include=FALSE}
+##store : df to loop through for trait/env associations
+##y : temporary df to store significant trait/env associations 
+
+##########################################################################################
+##Mexican accessions
+store = sem 
+y = NULL
+set.seed(111)
+
+for (i in 6) { #SRN_avg is in the 6th column
+  print(names(store)[i]) #Print variable to be tested 
+  boruta_train <- Boruta(store[,i] ~., data = store[,(c(i,7:160))], maxRuns=100, doTrace = 0, mcAdj=TRUE) #Will compare the importance of env variables for predicting phenotype i with expanded df
+  boruta_signif <- getSelectedAttributes(boruta_train, withTentative = FALSE) ##Get the important variables as predicted
+  tmp <- toString(boruta_signif) ##Change significant vars to a string 
+  print(boruta_signif) ##Print significant env variables
+  y <- rbind(y, tmp) ##Make a df of important variables 
+}
+
+sem_boruta <- as.matrix(y) ##Rename df 
+colnames(sem_boruta) <- c("Vars") ##Name variables column (stored as a string)
+rownames(sem_boruta) <- gsub(",.*$", "", sem_boruta) ##Add row names for the modeled variables
+
+####m_boruta saved for lazy load, otherwise have to rerun above code everytime 
+#saveRDS(sem_boruta, file = "./data/BorutaFeatures.rds")
+sem_boruta <- readRDS(file = "./data/BorutaFeatures.rds")
+```
+Feature selection is important to reduce redundant or unimportant variables, which helps increase overall model fit and reduce error. Below are the aspects of environment that are significantly associated with SRN. These environmental variables will be used to build the RF model.
+```{r, echo=FALSE}
+print("Significant environmental descriptors for SRN of Mexican accessions")
+print(sem_boruta)
+```
+
+```{r, include=FALSE}
+##Subset for variables identified by Boruta (stored in sem_boruta)
+sem_rf <- sem %>% dplyr::select(SRN_avg, OC, TN, pH_H20_1m, Alt, AI, PARSpr, PARWin, prec_1, prec_2, prec_4, prec_5, prec_6, prec_7, prec_8, prec_9, prec_10, prec_11, prec_12, tmin_1, tmin_2, tmin_3, tmin_4, tmin_10, tmin_11, tmin_12, tmean_1, tmean_11, tmean_12, vpd_1, vpd_7, vpd_8, vpd_9, vpd_10, vpd_11, vpd_12, Mean.Diurn.Rng, Isotherm, prec_10, Min.Tmp.Cld.M, Tmp.Ann.Rng, Mean.Tmp.Cld.Q, Ann.Prc, Prc.Wet.M, Prc.Wet.Q, Prc.Wrm.Q, Prc.Cld.Q, pet_1, pet_2, pet_11, pet_12, abs_Latitude)
+
+##Build training and testing set for rf 
+set.seed(111)
+data_set_size <- floor(nrow(sem_rf)*0.80)
+index <- sample(1:nrow(sem_rf), size=data_set_size)
+training <- sem_rf[index,]
+testing <- sem_rf[-index,]
+
+##Random forest
+set.seed(111)
+sem.rf <- randomForest(SRN_avg ~., data=training, proximity=TRUE, ntree=5000) 
+sem.rf
+# % Var explained: 11.2
+# Mean of squared residuals: 0.9830597
+
+#Set up for plotting training vs testing with the same axes lengths
+xaxis = training$SRN_avg
+yaxis = sem.rf$predicted
+all = c(xaxis,yaxis)
+range = c(min(all), max(all))
+
+plot(training$SRN_avg, sem.rf$predicted, main="Training set (861)", xlab="Observed SRN",
+     ylab="Predicted SRN", xlim=range, ylim=range, pch=1, cex=1, cex.lab=1.2, cex.axis=1, cex.main=1)
+line <- lm(sem.rf$predicted ~ training$SRN_avg)
+abline(line, col="red", lwd=2)
+legend("bottomright", bty="n", legend=paste("R2 =", 
+                                            format(summary(line)$adj.r.squared, digits=4)))
+summary(line)$r.squared
+summary(line)$adj.r.squared
+#plot.new()
+
+##Random forest predict
+rf_result <- data.frame(testing$SRN_avg, predict(sem.rf, testing[,-c(1)], type= "response"))
+plot(rf_result, ylim=c(1,8))
+
+##Set axes of scatter to the same scale 
+xaxis = training$SRN_avg
+yaxis = sem.rf$predicted
+all = c(xaxis, yaxis)
+range = c(min(all), max(all))
+ 
+##Plot result 
+testing.plot <- plot(rf_result[,1], rf_result[,2], main="Testing set predictions (861)", xlab= "Observed SRN", ylab="Predicted SRN",
+     xlim=range, ylim=range)
+line <- lm(rf_result[,2] ~ rf_result[,1])
+abline(line, col="red")
+legend("bottomright", bty="n", legend=paste("R2 =", 
+                                              format(summary(line)$adj.r.squared,
+                                                     digits=4)))
+
+##SHAP plot to show relative contribution of each decriptor on the model
+X <- training[which(names(training) != "SRN_avg")]
+predictor <- Predictor$new(sem.rf, data = X, y = training$SRN_avg)
+shapley <- Shapley$new(predictor, x.interest = X[1, ])
+
+shap.SRN <- shapley$plot() +
+  ggtitle("SRN") +
+   ylab("SHAP value")
+
+```
+Testing result and relative contribution of descriptors for model
+```{r, echo=FALSE,fig.show="hold", out.width="50%"}
+plot(testing.plot)
+plot(shap.SRN)
+```
+Predicting SRN for CIMMyT FOAM accessions
+```{r, include=FALSE}
+##Subsetted CIM data set for Mexican important variables 
+foam_rf <- foam %>% dplyr::select(Accession, Longitude, Latitude, OC, TN, pH_H20_1m, Alt, AI, PARSpr, PARWin, prec_1, prec_2, prec_4, prec_5, prec_6, prec_7, prec_8, prec_9, prec_10, prec_11, prec_12, tmin_1, tmin_2, tmin_3, tmin_4, tmin_10, tmin_11, tmin_12, tmean_1, tmean_11, tmean_12, vpd_1, vpd_7, vpd_8, vpd_9, vpd_10, vpd_11, vpd_12, Mean.Diurn.Rng, Isotherm, prec_10, Min.Tmp.Cld.M, Tmp.Ann.Rng, Mean.Tmp.Cld.Q, Ann.Prc, Prc.Wet.M, Prc.Wet.Q, Prc.Wrm.Q, Prc.Cld.Q, pet_1, pet_2, pet_11, pet_12, abs_Latitude)
+
+#Predict using RF
+prediction_srn <- predict(sem.rf, newdata=foam_rf)
+foam_rf$SRN_pred <- prediction_srn
+#write.csv(foam_rf, "./data/SRN_Predictions861Accessions_82322_Final.csv")
+
+ggplot(data = world) +
+  ggtitle("Predicted CIMMyT SRN") +
+ theme(plot.title = element_text(size=12)) +
+  geom_sf() +
+  coord_sf(xlim = c(-120, -80), ylim = c(0,35), expand = TRUE) +
+  geom_point(aes(x=Longitude, y=Latitude, color=SRN_pred), data=foam_rf, size = 1, alpha=.7) +
+  sc
+```
