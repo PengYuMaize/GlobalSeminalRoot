@@ -82,8 +82,8 @@ colnames(sem_boruta) <- c("Vars") ##Name variables column (stored as a string)
 rownames(sem_boruta) <- gsub(",.*$", "", sem_boruta) ##Add row names for the modeled variables
 
 ####m_boruta saved for lazy load, otherwise have to rerun above code everytime 
-#saveRDS(sem_boruta, file = "./data/BorutaFeatures.rds")
-sem_boruta <- readRDS(file = "./data/BorutaFeatures.rds")
+#saveRDS(sem_boruta, file = "./output/BorutaFeatures.rds")
+sem_boruta <- readRDS(file = "./output/BorutaFeatures.rds")
 ```
 Feature selection is important to reduce redundant or unimportant variables, which helps increase overall model fit and reduce error. Below are the aspects of environment that are significantly associated with SRN. These environmental variables will be used to build the RF model.
 ```{r, echo=FALSE}
@@ -167,7 +167,7 @@ foam_rf <- foam %>% dplyr::select(Accession, Longitude, Latitude, OC, TN, pH_H20
 #Predict using RF
 prediction_srn <- predict(sem.rf, newdata=foam_rf)
 foam_rf$SRN_pred <- prediction_srn
-#write.csv(foam_rf, "./data/SRN_Predictions861Accessions_82322_Final.csv")
+#write.csv(foam_rf, "./output/SRN_Predictions861Accessions_82322_Final.csv")
 
 ggplot(data = world) +
   ggtitle("Predicted CIMMyT SRN") +
