@@ -20,9 +20,10 @@ library(iml)
 ```
 
 ```{r, CIM and SRN data load, include=FALSE}
-##Has env and soil data for all CIMMYT accessions (Mexican FOAM genotypes available), will use this for trait predictions with trained model
+##Has env and soil data for all CIMMYT accessions (Mexican FOAM genotypes available), will use this for trait predictions with trained RF model
 foam <- read.csv("./data/FOAM_EnvVars_SRN.csv")
 
+##Senimal root phenotypic data
 sem <- read.csv("./data/PengData_EnvVars_CleanedImputed_SRN.csv")
 
 ##Create a new absolute latitude column for biologically relevant environmental variable 
@@ -52,12 +53,12 @@ foam_map <- ggplot(data = world) +
   coord_sf(xlim = c(-120, -80), ylim = c(0,35), expand = TRUE) +
   geom_point(aes(x=Longitude, y=Latitude), data=foam, size = 1, alpha=.9) 
 ```
-Distribution of phenotpyed accessions and accessions for predicitons 
+Distribution of phenotpyed accessions and accessions for RF predicitons 
 ```{r, echo=FALSE,fig.show="hold", out.width="50%"}
 SRN_map
 foam_map
 ```
-Using the Boruta method to identify environmental descriptors that describe variation in SRN. 
+Using the Boruta method to identify environmental descriptors that describe variation in SRN 
 ```{r, include=FALSE}
 ##store : df to loop through for trait/env associations
 ##y : temporary df to store significant trait/env associations 
@@ -92,7 +93,7 @@ print(sem_boruta)
 ```
 
 ```{r, include=FALSE}
-##Subset for variables identified by Boruta (stored in sem_boruta)
+##Subset for environmental descriptors identified by Boruta (stored in sem_boruta)
 sem_rf <- sem %>% dplyr::select(SRN_avg, OC, TN, pH_H20_1m, Alt, AI, PARSpr, PARWin, prec_1, prec_2, prec_4, prec_5, prec_6, prec_7, prec_8, prec_9, prec_10, prec_11, prec_12, tmin_1, tmin_2, tmin_3, tmin_4, tmin_10, tmin_11, tmin_12, tmean_1, tmean_11, tmean_12, vpd_1, vpd_7, vpd_8, vpd_9, vpd_10, vpd_11, vpd_12, Mean.Diurn.Rng, Isotherm, prec_10, Min.Tmp.Cld.M, Tmp.Ann.Rng, Mean.Tmp.Cld.Q, Ann.Prc, Prc.Wet.M, Prc.Wet.Q, Prc.Wrm.Q, Prc.Cld.Q, pet_1, pet_2, pet_11, pet_12, abs_Latitude)
 
 ##Build training and testing set for rf 
@@ -154,14 +155,14 @@ shap.SRN <- shapley$plot() +
    ylab("SHAP value")
 
 ```
-Testing result and relative contribution of descriptors for model
+Testing result and relative contribution of environmental descriptors for model
 ```{r, echo=FALSE,fig.show="hold", out.width="50%"}
 plot(testing.plot)
 plot(shap.SRN)
 ```
 Predicting SRN for CIMMyT FOAM accessions
 ```{r, include=FALSE}
-##Subsetted CIM data set for Mexican important variables 
+##Subsetted CIMMYT data set for important environmental desriptors
 foam_rf <- foam %>% dplyr::select(Accession, Longitude, Latitude, OC, TN, pH_H20_1m, Alt, AI, PARSpr, PARWin, prec_1, prec_2, prec_4, prec_5, prec_6, prec_7, prec_8, prec_9, prec_10, prec_11, prec_12, tmin_1, tmin_2, tmin_3, tmin_4, tmin_10, tmin_11, tmin_12, tmean_1, tmean_11, tmean_12, vpd_1, vpd_7, vpd_8, vpd_9, vpd_10, vpd_11, vpd_12, Mean.Diurn.Rng, Isotherm, prec_10, Min.Tmp.Cld.M, Tmp.Ann.Rng, Mean.Tmp.Cld.Q, Ann.Prc, Prc.Wet.M, Prc.Wet.Q, Prc.Wrm.Q, Prc.Cld.Q, pet_1, pet_2, pet_11, pet_12, abs_Latitude)
 
 #Predict using RF
