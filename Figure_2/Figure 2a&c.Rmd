@@ -1,0 +1,407 @@
+---
+title: "Figure 2 a&c"
+author: "Meng Li"
+date: "2023-05-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#setwd("D:/OneDrive - The Pennsylvania State University/Box Sync/Penn_State/Research_data/Seminal_roots_2021/Peng_data/Peng_pop_structure")
+
+#devtools::install_github("bcm-uga/TESS3_encho_sen")
+library(tess3r)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+library(ggpubr)
+library(cowplot)
+library(tibble)
+library(ggh4x)
+library(raster)
+library(rworldmap)
+library(gstat)
+library(rnaturalearth)
+library(sp)
+
+```
+
+For paralleling computing
+
+```{Parellel_Computing}
+#detectCores() #16
+library(parallel)
+library(snow)
+library(doSNOW)
+cl <- makeCluster(16, type = "SOCK")
+registerDoSNOW(cl)
+
+```
+
+# 1. read orignial and predicted phenotypic data and coordinates
+```{r phenotype}
+#environment data
+pheno <- read.csv("data/FOAM_EnvVars_SRN.csv",header = TRUE, row.names = 'X',na.strings="")
+#original phenotypic data
+SRN_orig <- read.csv('data/PengData_EnvVars_CleanedImputed_SRN.csv', row.names = 'X')
+#RF predicted phenotypic data
+SRN <- read.csv("output/SRN_Predictions861Accessions_82322_Final.csv", header = TRUE, row.names = 'X',na.strings="")
+
+pheno_SRN <- pheno %>% 
+    dplyr::select(Accession, Elevation) %>%
+    inner_join(SRN, by = "Accession") %>%
+    dplyr::select(SaID, Longitude, Latitude, SRN_pred,Elevation) %>%
+    drop_na(SaID)
+
+pheno_SRN_names <- pheno_SRN$SaID
+
+```
+
+# 2. Visualize SRN map + marginal plot (Figure 2a)
+
+```{r map}
+#remove duplicate locations before creating a spatial object (SRN is the same at the same location)
+SRN_pheno.1 = pheno_SRN[which(!duplicated(pheno_SRN[2:3])), ]
+
+#convert SRN dataframe into a spatial points object
+coordinates(SRN_pheno.1) = ~Longitude+Latitude
+plot(SRN_pheno.1)
+
+#Create a grid with a slightly larger extent
+#use the locator to click 4 points beyond the extent of the plot
+#and use those to set your x and y extents
+#locator(4)
+lon.range <- as.numeric(c(-120,-80))
+lat.range <- as.numeric(c(10,34))
+# now expand SRN range to a grid with spacing that to use in the interpolation
+#here we will use 0.1 grid cells:
+grd <- expand.grid(x=seq(from=lon.range[1], to=lon.range[2], by=0.1), y=seq(from=lat.range[1], to=lat.range[2], by=0.1))
+## convert grid to SpatialPixel class
+coordinates(grd) <- ~ x+y
+gridded(grd) <- TRUE
+plot(grd, cex=1.5)
+points(SRN_pheno.1, pch=1, col='red', cex=1)
+
+#Now we have set up our points and a grid to interpolate onto, we are ready carry out some interpolation. 
+#Kriging requires the construction of a semivariogram model to describe the spatial autocorrelation pattern for your particular variable.
+#The values in the cloud can be binned into lags with and plotted with a very similar function
+semivariog<-variogram(SRN_pred~1, locations=SRN_pheno.1, data=SRN_pheno.1)
+plot(semivariog)
+semivariog
+#From the empirical semivariogram plot and the information contained in the semivariog gstat object, we can estimate the sill, range and nugget to use in our model semivariogram.
+#Range: the point on the distance axis where the semivariogram starts to level off: 9
+#Sill: the point on the y axis where the semivariogram starts to level off: 0.5
+#Nugget: 0.19
+#Using this information we’ll generate a model semivariogram using the vgm() function in gstat.
+#first check the range of model shapes available in vgm
+vgm()
+#try different models and use the one fits the best
+#model.variog<-vgm(psill=0.72, model='Wav', nugget=0.19, range=9)
+model.variog<-vgm(psill=0.5,model='Wav',nugget=0.19, range=9)
+fit.variog<-fit.variogram(semivariog, model.variog)
+plot(semivariog, fit.variog)
+#using ordinary kriging
+krig<-krige(formula=SRN_pred ~ 1, locations=SRN_pheno.1, newdata=grd, model=model.variog)
+plot(krig)
+save(krig, file = 'output/Final_SRN_interpolation_krige_object.Rimage')
+
+#load('Saved_Rimage_object/Final_SRN_interpolation_krige_object.Rimage')
+#create a mask layer 
+mex_sp <- ne_countries(country = c("Mexico",'Guatemala','Belize','El Salvador','Honduras'), ##make an sp object of countries
+                       returnclass = c("sp")) 
+
+P_r <- raster::raster(krig)
+P_r.m <- raster::mask(P_r, mex_sp)
+plot(P_r.m)
+
+#dataframe for ggplot
+P_r.m_df <- raster::as.data.frame(P_r.m, xy=T)
+P_r.m_df <- P_r.m_df %>% dplyr::filter(!is.na(var1.pred))
+glimpse(P_r.m_df)
+
+# filter points to the selected area
+rownames(SRN_orig) <- SRN_orig$Accession
+
+countriesSP <- getMap(resolution='low')
+pointsSP = SpatialPoints(SRN_orig[,c("Longitude","Latitude")], proj4string=CRS(proj4string(countriesSP)))  
+
+# use 'over' to get indices of the Polygons object containing each point 
+indices = over(pointsSP, mex_sp)
+
+SRN_orig$name <- indices$name
+
+SRN_orig <- drop_na(SRN_orig, name)
+
+# ggplot map
+map.polygon <- getMap(resolution = "low")
+
+# color usa, cub, and nic as white
+ct <-  map_data('world') %>%
+    filter(region %in% c('USA','Cuba','Nicaragua')) %>%
+    mutate(color = 'white')
+
+
+library(ggExtra)
+library(gridExtra)
+library(cowplot)
+
+map_box <- ggplot() +
+  geom_tile(data = P_r.m_df, aes(x = x, y = y, fill = var1.pred))+
+  geom_path(data = map.polygon, aes(x = long, y = lat, group = group)) +
+  coord_sf(xlim = c(-120, -82), ylim = c(12, 34), expand = FALSE) +
+  geom_point(data = SRN_orig, aes(x = Longitude, y = Latitude),fill = 'white',color = 'black',size = 0.5,shape= 21,stroke = 0.4) +
+  #scale_color_gradient(low="white", high="deepskyblue4", name = 'Observed SRN',breaks=c(2,4,6,8)) +
+  #geom_polygon(data = ct, aes(x = long, y = lat, group = group), fill = 'white',color = 'black' ) +
+  scale_fill_scico(palette='bamako', direction = -1,name = 'Predicted SRN',breaks=c(3,4,5),
+                   guide = guide_colorbar(direction = "horizontal",barwidth = unit(2,'cm'), barheight = unit(0.2,'cm'))) +
+  force_panelsizes(rows = unit(4, "cm"),cols = unit(6, "cm")) +
+    theme_bw()+
+    theme(
+      #axis.line = element_line(colour = "black", size=0.5), #axis.line or not
+      axis.line = element_blank(), # y axis is blank
+      #axis.line.x=element_line(colour="black",size=0.5),
+      #axis.line.y=element_line(colour="black",size=0.5),
+      #axis.ticks = element_blank(),
+      panel.border = element_rect(colour="black",size=0.5),
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      #axis.text.y = element_text(size = 12,color = 'black',vjust = 0.2,face = 'bold',family = 'sans'), #family = 'sans'
+      #axis.text.x = element_text(size=12, color = "black",vjust = 0.2,face = 'bold', family = 'sans'), #for separate plots
+      #axis.text = element_blank(),
+      #axis.title.y = element_text(size=14, color = 'black',vjust = 1,face = 'bold', family = 'sans'), #for separate plots
+      axis.title.y = element_blank(),
+      #strip.text = element_text(size=14),
+      #axis.title.x = element_text(size =14, vjust = 0.5,color = 'black',face = 'bold', family = 'sans'),
+      axis.title.x = element_blank(),
+      #plot.tag = element_text(size = 18,color = 'black',face = 'bold', family = 'sans'),
+      #plot.tag.position = c(0.1, 1),
+      #legend.title = element_text(size=12, color = 'black',vjust = 1,face = 'bold', family = 'sans'),
+      legend.title = element_blank(),
+      legend.position= c(0.2,0.1),
+      #legend.direction="horizontal",
+      legend.text=element_text(size=10, color = 'black',vjust = 2,family = 'sans'),
+      #legend.key.size = unit(0.5,'cm'),
+      #legend.key.width = unit(0.05, 'cm'),
+      #legend.key = element_blank(),
+      #legend.key = element_rect(colour = "transparent", fill = "transparent")
+      legend.background=element_rect(fill = alpha("white", 0)),
+      #legend.box.margin=margin(-20,-20,-20,-20),
+      #plot.title=element_text(size=18,hjust = 0.5), #face="italic"
+      #plot.margin = unit(c(1,1,0,0), "lines") # for separate figures
+      #plot.margin = unit(c(0.5,0,0,0), 'lines')
+)
+
+map_box
+
+
+density_ybox <- axis_canvas(map_box, axis = "y", coord_flip = TRUE) + 
+      geom_smooth(data = pheno_SRN, aes(x = Latitude, y = SRN_pred,color = 'forestgreen', fill = '#C0CA33'), stat = 'smooth',linewidth = 1) +
+      geom_smooth(data = SRN_orig, aes(x= Latitude, y = SRN_avg,color = 'orange', fill = 'wheat'), stat = 'smooth',linewidth = 1 ) +
+      scale_colour_manual(name= '',values=c('forestgreen', 'orange'), labels = c("Predicted", "Observed")) +
+      scale_fill_manual(name= '',values=c('#C0CA33', 'wheat'), labels = c("Predicted", "Observed")) +
+      scale_x_continuous() +
+      force_panelsizes(cols = unit(2, "cm"),rows = unit(4, "cm")) + #
+      coord_flip() +
+      #coord_cartesian(xlim=c(1,5)) + 
+    theme_bw()+
+      theme(
+      #axis.line = element_line(colour = "black", size=0.5), #axis.line or not
+      #axis.line = element_blank(), # y axis is blank
+      axis.line.y=element_blank(),
+      axis.line.x=element_line(colour="black",size=0.5),
+      axis.ticks.y = element_blank(),
+      panel.border = element_rect(colour="black",size=0.5),
+      #panel.border = element_blank(),
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      panel.background = element_blank(),
+      axis.text.x = element_text(size = 12,color = 'black',vjust = 0.2,face = 'bold',family = 'sans'), #family = 'sans'
+      #axis.text.x = element_text(size=12, color = "black",vjust = 0.2,face = 'bold', family = 'sans'), #for separate plots
+      axis.text.y = element_blank(),
+      #axis.title.y = element_text(size=14, color = 'black',vjust = 1,face = 'bold', family = 'sans'), #for separate plots
+      axis.title.y = element_blank(),
+      #strip.text = element_text(size=14),
+      #axis.title.x = element_text(size =14, vjust = 0.5,color = 'black',face = 'bold', family = 'sans'),
+      axis.title.x = element_blank(),
+      #plot.tag = element_text(size = 18,color = 'black',face = 'bold', family = 'sans'),
+      #plot.tag.position = c(0.1, 1),
+      #legend.title = element_text(size=12, color = 'black',vjust = 1,face = 'bold', family = 'sans'),
+      #legend.title = element_blank(),
+      legend.position= 'right',
+      legend.direction="horizontal",
+      #legend.direction="horizontal",
+      #legend.text=element_text(size=10, color = 'black',vjust = 2,family = 'sans'),
+      #legend.key.size = unit(0.5,'cm'),
+      #legend.key.width = unit(0.05, 'cm'),
+      #legend.key = element_blank(),
+      #legend.key = element_rect(colour = "transparent", fill = "transparent")
+      #legend.background=element_rect(fill = alpha("white", 0)),
+      #legend.box.margin=margin(-20,-20,-20,-20),
+      #plot.title=element_text(size=18,hjust = 0.5), #face="italic"
+      #plot.margin = unit(c(1,1,0,0), "lines") # for separate figures
+      #plot.margin = unit(c(0.5,0,0,0), 'lines')
+)
+
+p2 <- insert_yaxis_grob(map_box, density_ybox, grid::unit(1, "in"), position = "right")
+
+```
+
+# 3. Calculate pop structure + map magic parents (Figure 2c)
+
+3.1 load highly filtered genotype data
+I will try with the highly filtered genotype data; this was used to compute kinship matrix in the GWAS analysis
+
+```{r genotype}
+# test with highly filtered genotype
+load('genotype/HighFilteredReduced.Rimage')
+#genotype data was obtained from:  https://github.com/danjgates/AdaptationScripts2
+
+# change genotype to 0,1,2
+X<-genoMDS*2
+X<-as.matrix(X)
+
+```
+
+3.2 get needed SRN and coordinates data
+
+```{r need}
+# get the genotype names 
+inters <-intersect(pheno_SRN_names,rownames(X))
+
+# get the genome data
+X_geno<-X[inters,]
+
+# get coordinates
+pheno_SRN.1<- pheno_SRN %>% column_to_rownames(var = 'SaID')
+
+coordinates <- pheno_SRN.1[inters,1:2]
+coordinates<-as.matrix(coordinates)
+
+# get SRN and coordinates
+SRN_pheno <- pheno_SRN.1[inters, 1:4]
+
+```
+
+3.3 estimate ancestry coefficients using tess3; pick the number of groups
+
+```{r coef}
+tess3.obj <- tess3(X = X_geno, coord = coordinates, K = 1:9, 
+                   method = "projected.ls", ploidy = 2, openMP.core.num = 16) 
+
+save(tess3.obj, file='output/Final_tess3_obj_origin.Rimage')
+#load('output/Final_tess3_obj_origin.Rimage')
+
+plot(tess3.obj, pch = 19, col = "blue",
+     xlab = "Number of ancestral populations",
+     ylab = "Cross-validation score")
+# k =5 or 6
+# retrieve tess3 Q matrix for K = 5,6 clusters 
+q.matrix_5 <- qmatrix(tess3.obj, K = 5)
+#q.matrix_6 <- qmatrix(tess3.obj, K = 6)
+
+my.colors <- c("tomato", "orange", "lightblue", "wheat","olivedrab",'purple','darkblue')
+my.palette <- CreatePalette(my.colors, 9)
+
+map.polygon <- getMap(resolution = "low")
+                      
+# color usa, cub, and nic as white
+ct <-  map_data('world') %>%
+    filter(region %in% c('USA','Cuba','Nicaragua')) %>%
+    mutate(color = 'white')
+  
+pl_5 <- ggtess3Q(q.matrix_5, coordinates, map.polygon = map.polygon, col.palette = my.palette)
+pop_5<-pl_5 +
+  #ggplot() +
+  geom_path(data = map.polygon, aes(x = long, y = lat, group = group)) +
+  #xlim(-16, 42) + 
+  #ylim(35, 65) + 
+  #coord_equal() + 
+  coord_sf(xlim = c(-120, -82), ylim = c(12, 34), expand = FALSE) +
+  geom_polygon(data = ct, aes(x = long, y = lat, group = group, fill = color),color = 'black' ) +
+  scale_fill_identity() +
+  force_panelsizes(rows = unit(4, "cm"),cols = unit(6, "cm")) + # set the panel size
+  #scale_color_gradient(low = 'white',high = 'black', #space = 'Lab', #'#57C7EB'
+  #                         name='Predict SRN') +
+  #xlab("Longitute") +
+  #ylab("Latitude") + 
+  theme_bw() +
+    theme(legend.key.size = unit(0.08,'cm'),
+            legend.key.width = unit(0.08, 'cm'),
+            #legend.box.margin=margin(-10,0,0,-10),
+            legend.title = element_text(size=4, color = 'black', family = 'sans'),
+            #legend.title = element_blank(),
+            legend.text=element_text(size=3,color = 'black',vjust = 0.5, family = 'sans'),
+            #legend.direction = "vertical", 
+            #legend.box = "horizontal",
+            #legend.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_blank(),
+            #axis.title.y = element_text(size =4, vjust = 0.5,color = 'black',face = 'bold', family = 'sans'),
+            axis.title = element_blank(),
+          #axis.title.x = element_text(size =4, vjust = 0.5,color = 'black',face = 'bold', family = 'sans'),
+            plot.margin = unit(c(1,0,1,0), "lines"),
+            panel.grid.major = element_blank(),
+            #panel.grid.major = element_line(color = gray(.5), 
+            #                                linetype = "dashed", 
+            #                                size = 0.1), 
+            panel.background = element_rect(fill = 'white'))
+pop_5
+```
+
+3.4 plot magic founder
+
+```{r magic}
+
+magic_founder <- read.csv('data/MAGIC_Founders_color.csv', header = TRUE)
+magic_founder$Race <- factor(magic_founder$Race)
+
+
+library(scico)
+library(ggh4x) # for changing panel size
+# Change plot size to 4 inch x 3inch
+#options(repr.plot.width=10, repr.plot.height=4)
+SRN_map<- ggplot() +
+  #geom_tile(data = P_r.m_df, aes(x = x, y = y, fill = var1.pred))+
+  geom_path(data = map.polygon, aes(x = long, y = lat, group = group)) +
+  coord_sf(xlim = c(-120, -82), ylim = c(12, 34), expand = FALSE) +
+  #geom_point(data = SRN_orig.1, aes(x = Longitude, y = Latitude),fill = 'white',color = 'black',size = 0.5,shape= 21,stroke = 0.4) +
+  #scale_color_gradient(low="white", high="deepskyblue4", name = 'Observed SRN',breaks=c(2,4,6,8)) +
+  geom_point(data=magic_founder,aes(x = Longitude, y = Latitude,group = Race, color = Race), size =1.5, shape = 19) +
+  scale_color_manual(values = c("#5EB7BE", "#337C61", "#E1C34A", "#D8904F", "#725E5E", "#F0B3A2", "#88CF56", "#A44638")) +
+  #geom_polygon(data = ct, aes(x = long, y = lat, group = group), fill = 'white',color = 'black' ) +
+  force_panelsizes(rows = unit(4, "cm"),cols = unit(6, "cm")) + # set the panel size
+  theme_bw() +
+    theme(legend.key.size = unit(0.3,'cm'),
+            legend.key.width = unit(0.15, 'cm'),
+            legend.box='horizontal',
+            legend.margin=margin(0,0,0,0),
+            legend.box.margin=margin(-10,-10,-10,-10),
+            legend.title = element_text(size=3, color = 'black', family = 'sans'),
+            #legend.title = element_blank(),
+            legend.text=element_text(size=3,color = 'black',vjust = 0.5),
+            #legend.position = c(0.25,0.15),
+            legend.position = 'bottom',
+            #legend.direction = "vertical", 
+            #legend.box = "horizontal",
+            #legend.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_blank(),
+            #axis.title.y = element_text(size =4, vjust = 0.5,color = 'black',face = 'bold', family = 'sans'),
+            axis.title = element_blank(),
+          #axis.title.x = element_text(size =4, vjust = 0.5,color = 'black',face = 'bold', family = 'sans'),
+            plot.margin = unit(c(0,0,0,0), "cm"),
+            panel.grid.major = element_blank(),
+            #panel.grid.major = element_line(color = gray(.5), 
+            #                                linetype = "dashed", 
+            #                                size = 0.1), 
+            panel.background = element_rect(fill = 'white'))
+
+SRN_map
+
+```

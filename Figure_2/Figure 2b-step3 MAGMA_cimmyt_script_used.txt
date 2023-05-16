@@ -1,0 +1,13 @@
+To use MAGMA, Plink binary input files are needed.
+1. Convert numeric file to Plink binary format (.bed/.bim/.fam) using function: write.plink in package genio in R. 
+	check the create_plink_file_cimmyt.r
+	create a phenotype file to be used in magma
+	create a population structure file to be used as covariance in magma
+2. Apply gene annotation using MAGMA
+	a. download MAGMA windows -->extract files-->move magma.exe to the working directory
+	b. move plink binary file sets and gene model file to the working directory
+	c. cd working directory
+	d. magma --annotate window=2.5 nonhuman --snp-loc plink_file.bim --gene-loc gene_model_noheader.txt --out file_name
+4. Move GWAS results to working directory if using P values
+5. Run magma
+	magma --bfile Peng_SRN_Cimmyt --gene-annot Peng_SRN_Cimmyt.genes.annot --pval SRN_pred_root_mexi_results_with_marker.txt use=Marker,SRN_pre_p N=1777 --gene-model multi=snp-wise --out Peng_SRN_Cimmyt_pred_multi_2.5kb

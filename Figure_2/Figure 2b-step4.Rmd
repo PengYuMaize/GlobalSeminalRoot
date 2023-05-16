@@ -1,0 +1,164 @@
+---
+title: "miami_plot"
+author: "Meng Li"
+date: "2023-05-16"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(GenomicRanges)
+library(dplyr)
+library(tidyverse)
+library(data.table)
+library(stringr)
+library(tidyr)
+library(tibble)
+library(karyoploteR)
+
+```
+
+## Read gene model and site info for magic
+
+1. Read gene model and CIMMYT site info
+```{r read}
+gene_model <- read.csv("genotype/AGPv4.36.Genes.csv",header = TRUE)
+# gene models were obtained from maizegdb
+
+magic_site <- read.csv("output/scansnps_info.csv", header = TRUE)
+
+```
+
+## Get gene annotation for magic data
+2. Gene annotation: +/- 2.5kb around genes
+
+```{r annotation}
+magic_site_genome <- magic_site %>%
+      mutate(Start = pos - 2500, End = pos + 2500) %>%
+      dplyr::rename(Marker = snp, Chr = chr) %>%
+      dplyr::select(Marker, pos, Chr, Start, End)
+
+magic_rtcs_genome <- magic_site %>%
+      filter(chr == 1 & pos <= 20000000) %>%
+      mutate(Start = pos - 2500, End = pos + 2500) %>%
+      dplyr::rename(Marker = snp, Chr = chr) %>% 
+      dplyr::select(Marker, pos, Chr, Start, End)
+
+```
+
+## Read cimmyt annotation data
+
+```{r annotate}
+cimmyt_2.5kb_ann <- read.csv('output/cimmyt_gene_annotation_2.5kb.csv', header = TRUE, row.names = 'X')
+
+cimmyt_2.5kb_ann.1 <- cimmyt_2.5kb_ann %>%
+      dplyr::rename(Marker = GeneID, pos = Marker) %>%
+      dplyr::select(Marker, pos, Chr, Start, End)
+
+cimmyt_2.5kb_ann.rtcs <- cimmyt_2.5kb_ann %>%
+      filter(Chr == 1 & End <= 20000000) %>%
+      dplyr::rename(Marker = GeneID, pos = Marker) %>%
+      dplyr::select(Marker, pos, Chr, Start, End)
+
+```
+
+## Miami plot for Cimmyt and magic 
+
+```{r data}
+genome <- rbind(cimmyt_2.5kb_ann.1,magic_site_genome) 
+#genome$Chr <- as.numeric(genome$Chr)
+
+genome.1 <- genome %>%
+      group_by(Chr) %>%
+      summarise(Start = min(Start), End= max(End)) 
+
+custom.genome <- toGRanges(data.frame(chr=genome.1$Chr, start=genome.1$Start,end=genome.1$End))
+      
+      df_magic_SRN <-fread(file = 'output/scansnps_lod.csv', col.names = c('Marker','lod')) # read text files, skip first line
+      df_cimmyt_SRN <- fread(file= 'output/Peng_SRN_Cimmyt_Final_pred_multi_2.5kb.genes.out.txt', skip =1)
+      
+      #-----magic_SRN------#
+      magic_SRN <- magic_site_genome %>%
+            left_join(df_magic_SRN, by = 'Marker') %>%
+        dplyr::select(Marker, Chr, Start, End, lod) %>%
+        dplyr::rename(START = Start, STOP = End) 
+      
+      magic_SRN_range <- toGRanges(data.frame(chr=magic_SRN$Chr,
+                                  start=magic_SRN$START,
+                                  end=magic_SRN$STOP,
+                                  name= magic_SRN$Marker,
+                                  pval=magic_SRN$lod))
+
+      #-----cimmyt pred SRN----#
+      cimmyt_SRN <- df_cimmyt_SRN %>%
+        dplyr::select(GENE, CHR,START,STOP, P_MULTI) 
+      
+      cimmyt_SRN_range <- toGRanges(data.frame(chr=cimmyt_SRN$CHR,
+                                  start=cimmyt_SRN$START,
+                                  end=cimmyt_SRN$STOP,
+                                  name= cimmyt_SRN$GENE,
+                                  pval=cimmyt_SRN$P_MULTI))
+      
+      highlight_rtcs <- highlight_160 %>%
+          filter(GENE %in% c('Zm00001d027679'))
+      
+      highlight_rtcs_range <- toGRanges(data.frame(chr=highlight_rtcs$CHR,
+                                  start=highlight_rtcs$START,
+                                  end=highlight_rtcs$STOP,
+                                  name= highlight_rtcs$GENE,
+                                  #Gene = highlight_rtcs$GENE,
+                                  y=-log10(highlight_rtcs$P_MULTI),
+                                  pval=highlight_rtcs$P_MULTI))
+      
+      
+    #---------miami plot top: magic SRN, bottom: cimmyt pred SRN ----------#
+      
+      #pdf(file = 'Final_Miami_plot_Magic_qtl_cimmyt_pred_magma_gene_8x4_points_blue.pdf', width = 3.14961, height = 1.5748) # for a 8x4cm
+      #png('cimmyt_magma_magic_qtl/Miami_points_only_rtcs_line_8x4_used.png', width = 80, height = 40, units = 'mm', res = 300)
+        #Set plot parameters
+      #par(mfrow=c(1,1),pin = c(3.14961, 1.5748))
+        pp <- getDefaultPlotParams(plot.type=4)
+        pp$rightmargin <- 0.04
+        pp$leftmargin <- 0.09
+        pp$bottommargin <- 10
+        pp$topmargin <- 20
+        pp$ideogramheight <- 0 # change it to a line
+        pp$data1inmargin <- 0
+        
+        kp.4 <- plotKaryotype(genome = custom.genome,plot.type=4,labels.plotter=NULL,plot.params = pp) #cytobands = custom.cytobands,
+        #kp.4 <- plotKaryotype(genome = custom.genome,plot.type=4,plot.params = pp)
+        
+        #cimmyt_SRN_range on the top
+        kpAddLabels(kp.4, labels = "-log10(P)", srt=90, pos=3, side = 'left', r0=0.5, r1=1, cex=0.8, label.margin = 0.06)
+        kpAddLabels(kp.4, labels = "CIMMYT predicted", srt=90, pos=3, side = 'right', 
+                    r0=0, r1=1.5, cex=0.5, label.margin = 0.03)
+        kp <- kpPlotManhattan(kp.4, data=cimmyt_SRN_range, r0=0.5, r1=1, 
+                              suggestive.col="white", genomewide.col = "white", points.cex = 0.3,
+                               points.col = "2blues")  
+        #kpAddBaseNumbers(kp.4, add.units = TRUE, cex=1, tick.dist = 1e10)
+        kpAxis(kp, ymin=0, ymax=ceiling(kp$latest.plot$computed.values$ymax),cex = 0.8, r0=0.5) #ceiling: round to the nearest #, label.margin = -100
+
+        #magic_SRN_range on the bottom
+        kpAddLabels(kp, labels = 'MEMA', srt=90, pos=3,side = 'right', r0=0, r1=0.5, cex=0.5, label.margin = 0.03)
+        kp.magic <- kpPlotManhattan(kp.4, logp = FALSE,  data=magic_SRN_range, r0=0.5, r1=0,  
+            points.cex = 0.3, ymin = 0, ymax = 4, suggestive.col="white", genomewide.col = "white",  points.col = "2blues") #
+        kpAxis(kp.magic, ymin=0, ymax=4,cex = 0.8, r0=0.5, r1=0)
+        kpAddLabels(kp.magic, labels = "LOD", srt=90, pos=3, side = 'left', r0=0, r1=0.5, cex=0.8, label.margin = 0.06)
+        kpAbline(kp.4, h=0.5,col="black", lwd=2)
+        
+        # highlight genes
+        #kpPoints(kp, data = highlight_160_range, pch=16, cex=0.5,col = 'red',ymax=kp$latest.plot$computed.values$ymax, r0=0.5) 
+        
+        #kpPoints(kp, data = highlight_5_range, pch=16, cex=1,col = 'orange',ymax=kp$latest.plot$computed.values$ymax, r0=0.5) 
+        kpPoints(kp, data = highlight_rtcs_range, pch=19, cex=0.8,col = 'black',ymax=kp$latest.plot$computed.values$ymax, r0=0.5) 
+        kpPoints(kp, data = highlight_rtcs_range, pch=16, cex=0.6,col = 'red',ymax=kp$latest.plot$computed.values$ymax, r0=0.5) 
+        
+        kpPlotMarkers(kp, data=highlight_rtcs_range, labels=highlight_rtcs_range$name, srt=0,y=15, 
+                      label.margin= 0.02,ymax=kp$latest.plot$computed.values$ymax,line.color="#333333", r0=0, cex =0.5, lwd = 1.5, lty = 'dotted')
+        
+        dev.off()
+#}
+
+```
